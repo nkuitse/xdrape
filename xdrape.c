@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <string.h>
 
 static void set_window_name(Display *disp, Window win, char *name);
 static unsigned long get_color(Display *disp, const char *colstr);
@@ -22,15 +23,22 @@ int main(int argc, char **argv)
     int w, h;
     int pid;
     XClassHint class = { "xdrape", "xdrape" };
-    char *colstr = "red";
+    char *colstr = 0;
+    unsigned long color = 0;  /* I want to paint it black! */
     int click_to_exit = 0;
+    int key_to_exit = 0;
     int echo = 0;
+    long sleep_and_exit = 0;
     XSetWindowAttributes wa;
     char *program = argv[0];
 
     argv++; argc--;
     if (argc > 0 && !strncmp(argv[0], "-c", 2)) {
         click_to_exit = 1;
+        argv++; argc--;
+    }
+    if (argc > 0 && !strncmp(argv[0], "-q", 2)) {
+        key_to_exit = 1;
         argv++; argc--;
     }
     if (argc > 0 && !strncmp(argv[0], "-k", 2)) {
@@ -49,6 +57,15 @@ int main(int argc, char **argv)
         echo |= ButtonReleaseMask;
         argv++; argc--;
     }
+    if (argc > 1 && !strncmp(argv[0], "-s", 2)) {
+        sleep_and_exit = atol(argv[1]);
+        argv += 2; argc -= 2;
+    }
+    if (argc > 1 && !strncmp(argv[0], "-C", 2)) {
+        colstr = argv[1];
+        argv += 2; argc -= 2;
+    }
+
     switch (argc)
     {
         case 0: w = h = 0;
@@ -62,6 +79,10 @@ int main(int argc, char **argv)
                 printf("usage: %s WIDTH [HEIGHT]\n", program);
                 exit(1);
                 break;
+    }
+    if (w > 10000 || h > 10000) {
+        printf("usage: %s WIDTH [HEIGHT]\n", program);
+        exit(1);
     }
 
     /* Connect to the default Xserver */
@@ -103,7 +124,9 @@ int main(int argc, char **argv)
     );
     set_window_name(disp, win, "xdrape");
     XSetClassHint(disp, win, &class);
-    (void) XSetWindowBackground(disp, win, 0);      /* I want to paint it black! */
+    if (colstr)
+        color = get_color(disp, colstr);
+    (void) XSetWindowBackground(disp, win, color);
     XSelectInput(disp, win,
         StructureNotifyMask |
         ButtonPressMask | ButtonReleaseMask |
@@ -122,6 +145,12 @@ int main(int argc, char **argv)
     (void) close(0);
     /* (void) close(1); */
     (void) close(2);
+    
+    if (sleep_and_exit > 0)
+    {
+        usleep(sleep_and_exit);
+        exit(0);
+    }
 
     /* Event loop to handle resizes */   
     for (;;)
@@ -145,6 +174,8 @@ int main(int argc, char **argv)
                     echo_button((XButtonEvent *) &ev, UP);
                 break;
             case KeyPress:
+                if (key_to_exit)
+                    exit(0);
                 if (echo & KeyPressMask)
                     echo_key((XKeyEvent *) &ev, DOWN);
                 break;
