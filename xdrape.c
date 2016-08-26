@@ -1,10 +1,11 @@
+#include <unistd.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <unistd.h>
 #include <string.h>
 
+static void usage();
 static void set_window_name(Display *disp, Window win, char *name);
 static unsigned long get_color(Display *disp, const char *colstr);
 static void echo_key(XKeyEvent *kevp, int trigger);
@@ -13,6 +14,13 @@ static void echo_button(XButtonEvent *bevp, int trigger);
 #define DOWN 0
 #define UP   1
 
+char *program;
+char *options;
+int in_window = 0;
+
+void enter(Display *disp, Window win);
+void leave(Display *disp, Window win);
+
 int main(int argc, char **argv)
 {
     Display *disp;
@@ -20,70 +28,71 @@ int main(int argc, char **argv)
     Window root;
     Window win;
     XWindowAttributes root_attr;
-    int w, h;
-    int pid;
+    int w = 0, h = 0;
+    int x = 0, y = 0;
     XClassHint class = { "xdrape", "xdrape" };
+    char *name = "xdrape";
     char *colstr = 0;
     unsigned long color = 0;  /* I want to paint it black! */
     int click_to_exit = 0;
     int key_to_exit = 0;
+    int run_in_foreground = 0;
+    int ored = False;
     int echo = 0;
     long sleep_and_exit = 0;
     XSetWindowAttributes wa;
-    char *program = argv[0];
+    char opt;
+    unsigned long valuemask = CWEventMask;
 
-    argv++; argc--;
-    if (argc > 0 && !strncmp(argv[0], "-c", 2)) {
-        click_to_exit = 1;
-        argv++; argc--;
+    program = argv[0];
+    options = "  -m        click to exit\n"
+              "  -q        press a key to exit\n"
+              "  -f        run in foreground\n"
+              "  -o        set override-redirect flag\n"
+              "  -k        print key presses\n"
+              "  -K        print key releases\n"
+              "  -b        print button presses\n"
+              "  -B        print button releases\n"
+              "  -s NUM    exit after NUM seconds\n"
+              "  -c COLOR  set background color\n"
+              "  -n STR    set WM_NAME\n"
+              "  -N NAME   set resource name\n"
+              "  -C CLASS  set resource class\n"
+              "  -x POS    set x position\n"
+              "  -y POS    set y position\n"
+              "  -w NUM    set width\n"
+              "  -h NUM    set height\n"
+            ;
+    while ((opt = getopt(argc, argv, "mqfokKbBs:c:n:N:C:x:y:w:h:")) != -1) {
+        switch(opt) {
+            case 'm': click_to_exit = 1;             break;
+            case 'q': key_to_exit   = 1;             break;
+            case 'f': run_in_foreground = 1;         break;
+            case 'o': ored          = 1;             break;
+            case 'k': echo |= KeyPressMask;          break;
+            case 'K': echo |= KeyReleaseMask;        break;
+            case 'b': echo |= ButtonPressMask;       break;
+            case 'B': echo |= ButtonReleaseMask;     break;
+            case 's': sleep_and_exit = atol(optarg); break;
+            case 'c': colstr = optarg;               break;
+            case 'n': name   = optarg;               break;
+            case 'N': class.res_name  = optarg;      break;
+            case 'C': class.res_class = optarg;      break;
+            case 'x': x = atoi(optarg);              break;
+            case 'y': y = atoi(optarg);              break;
+            case 'w': w = atoi(optarg);              break;
+            case 'h': h = atoi(optarg);              break;
+            default : usage();
+        }
     }
-    if (argc > 0 && !strncmp(argv[0], "-q", 2)) {
-        key_to_exit = 1;
-        argv++; argc--;
-    }
-    if (argc > 0 && !strncmp(argv[0], "-k", 2)) {
-        echo |= KeyPressMask;
-        argv++; argc--;
-    }
-    if (argc > 0 && !strncmp(argv[0], "-K", 2)) {
-        echo |= KeyReleaseMask;
-        argv++; argc--;
-    }
-    if (argc > 0 && !strncmp(argv[0], "-b", 2)) {
-        echo |= ButtonPressMask;
-        argv++; argc--;
-    }
-    if (argc > 0 && !strncmp(argv[0], "-B", 2)) {
-        echo |= ButtonReleaseMask;
-        argv++; argc--;
-    }
-    if (argc > 1 && !strncmp(argv[0], "-s", 2)) {
-        sleep_and_exit = atol(argv[1]);
-        argv += 2; argc -= 2;
-    }
-    if (argc > 1 && !strncmp(argv[0], "-C", 2)) {
-        colstr = argv[1];
-        argv += 2; argc -= 2;
-    }
-
-    switch (argc)
-    {
-        case 0: w = h = 0;
-                break;
-        case 1: w = h = atoi(argv[0]);
-                break;
-        case 2: w = atoi(argv[0]);
-                h = atoi(argv[1]);
-                break;
-        default:
-                printf("usage: %s WIDTH [HEIGHT]\n", program);
-                exit(1);
-                break;
-    }
-    if (w > 10000 || h > 10000) {
-        printf("usage: %s WIDTH [HEIGHT]\n", program);
-        exit(1);
-    }
+    argc -= optind;
+    argv += optind;
+    /*
+    if (sleep_and_exit == 0 && !click_to_exit && !key_to_exit)
+        usage();
+    */
+    if (w > 20000 || h > 20000)
+        usage();
 
     /* Connect to the default Xserver */
     disp   = XOpenDisplay(NULL);
@@ -103,8 +112,15 @@ int main(int argc, char **argv)
         h = root_attr.height;
 
     /* Create the window */
-    wa.override_redirect = 1;
+    (void) memset(&wa, 0, sizeof(XSetWindowAttributes));
+    if (ored) {
+        wa.override_redirect = True;
+        valuemask |= CWOverrideRedirect;
+    }
+    /*
     wa.background_pixmap = ParentRelative;
+    valuemask |= CWBackPixmap;
+    */
     wa.event_mask =
         ButtonPressMask     | ButtonReleaseMask | ButtonMotionMask    |
         KeyPressMask        | KeyReleaseMask    | PropertyChangeMask  |
@@ -114,54 +130,72 @@ int main(int argc, char **argv)
     ;
     win = XCreateWindow(
         disp, root,
-        0, 0, w, h,
+        x, y, w, h,
         0,
-        CopyFromParent, /* DefaultDepth(disp, screen), */
+        CopyFromParent,
         InputOutput,
-        CopyFromParent, /* DefaultVisual(disp, screen), */
-        CWEventMask,
+        CopyFromParent,
+        valuemask,
         &wa
     );
-    set_window_name(disp, win, "xdrape");
+    set_window_name(disp, win, name);
     XSetClassHint(disp, win, &class);
     if (colstr)
         color = get_color(disp, colstr);
     (void) XSetWindowBackground(disp, win, color);
     XSelectInput(disp, win,
-        StructureNotifyMask |
-        ButtonPressMask | ButtonReleaseMask |
-        KeyPressMask | KeyReleaseMask
+        ButtonPressMask     | ButtonReleaseMask | ButtonMotionMask    |
+        KeyPressMask        | KeyReleaseMask    | PropertyChangeMask  |
+        EnterWindowMask     | LeaveWindowMask   | StructureNotifyMask |
+        PointerMotionMask   | ExposureMask      | FocusChangeMask     |
+        VisibilityChangeMask
     );
-    XMapWindow(disp, win);                          /* Actually display the window */
-    XSync(disp, False);                             /* Synchronise with the Xserver */
+    /*
+    */
+    XMapRaised(disp, win);
+    /*
+    if (echo & (KeyPressMask|KeyReleaseMask))
+        XSetInputFocus(disp, win, RevertToParent, CurrentTime);
+    */
+    XSync(disp, False);
 
     printf("0x%x\n", (unsigned int) win);
+    (void) fflush(0);
 
-    pid = fork();
-    if (pid < 0)
-        return -1;
-    if (pid > 0)
-        return 0;
+    if (!run_in_foreground) {
+        int pid = fork();
+        if (pid < 0)
+            return -1;
+        else if (pid > 0)
+            return 0;
+    }
+    /* child process */
     (void) close(0);
-    /* (void) close(1); */
     (void) close(2);
     
-    if (sleep_and_exit > 0)
-    {
+    if (sleep_and_exit > 0) {
         usleep(sleep_and_exit);
         exit(0);
     }
 
-    /* Event loop to handle resizes */   
-    for (;;)
     /* while (XPending(disp)) */
-    {
+    for (;;) {
         /* Sit and wait for an event to happen */ 
         XEvent ev;
         XNextEvent(disp, &ev);
+        /*
+            printf("ev %d\n", ev.type);
+            fflush(0);
+        */
         switch (ev.type) {
             case ConfigureNotify:
                 XSync(disp, False);
+                break;
+            case EnterNotify:
+                enter(disp, win);
+                break;
+            case LeaveNotify:
+                leave(disp, win);
                 break;
             case ButtonPress:
                 if (echo & ButtonReleaseMask)
@@ -185,21 +219,53 @@ int main(int argc, char **argv)
                 break;
         }
     }
+    if (in_window)
+        XUngrabKeyboard(disp, CurrentTime);
+    /*
+    XSetInputFocus(disp, PointerRoot, RevertToParent, CurrentTime);
+    */
+    XCloseDisplay(disp);
+}
+
+void
+enter(Display *disp, Window win)
+{
+    in_window = 1;
+    XGrabKeyboard(disp, win, True, GrabModeAsync, GrabModeAsync, CurrentTime);
+}
+
+void
+leave(Display *disp, Window win)
+{
+    in_window = 0;
+    XUngrabKeyboard(disp, CurrentTime);
+}
+
+void
+usage()
+{
+    printf("usage: %s [OPTION...]\noptions:\n%s", program, options);
+    exit(1);
 }
 
 void
 echo_button(XButtonEvent *bevp, int trigger)
 {
     printf("mouse %s %d %d\n", (trigger == UP ? "up" : "down"), bevp->x, bevp->y);
+    (void) fflush(0);
 }
 
 void
 echo_key(XKeyEvent *kevp, int trigger)
 {
     KeySym keysym;
-    char keybuf[20];
-    if (XLookupString(kevp, (char *) keybuf, sizeof(keybuf), &keysym, NULL))
+    char keybuf[40];
+    int n;
+    if ((n = XLookupString(kevp, keybuf, sizeof(keybuf)-1, &keysym, NULL)) > 0) {
+        keybuf[n] = 0;
         printf("key %s %s\n", (trigger == UP ? "up" : "down"), keybuf);
+        (void) fflush(0);
+    }
 }
 
 void
