@@ -37,7 +37,7 @@ clean:
 dist: clean
 	@echo creating dist tarball
 	@mkdir -p ${PROG}-${VERSION}
-	@cp -R LICENSE Makefile README config.mk \
+	@cp -R LICENSE Makefile README* config.mk \
 		${MAN} ${SRC} ${PROG}-${VERSION}/
 	@tar -czf ${PROG}-${VERSION}.tar.gz ${PROG}-${VERSION}
 	@rm -rf ${PROG}-${VERSION}
